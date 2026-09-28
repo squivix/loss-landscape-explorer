@@ -28,8 +28,9 @@ hidden by the fog aren't drawn. Medium and larger maps get lettered/numbered sec
 You discover ground by lighting it. The flashlight (the default) lights a pool of light wherever
 the camera points, joined to a small circle at your feet by a smooth teardrop, so you can sweep
 it around without walking. In first person it follows your view up and down: the pool lands
-where you're aiming and grows with distance, out to "Beam reach"; its light spills faintly
-farther but doesn't reveal. `F` switches to the lantern, which lights a circle around you
+where you're aiming and grows with distance, out to "Beam reach". Its light carries on about
+three times as far and fades out with distance, lighting unrevealed ground too, but only the
+beam reveals it. `F` switches to the lantern, which lights a circle around you
 ("Light radius"). A local minimum inside the lit beam counts as found, same as walking up to
 it; the global minimum only counts once you walk up to it. The revealed area is drawn per pixel
 from a fog texture, so its edge is a smooth curve.

@@ -100,6 +100,11 @@ function noise(i: number) {
 
 /** Brightness of never-seen ground, so the lantern still shows its shape. */
 const UNEXPLORED = 0.035;
+/**
+ * A glow along the flashlight's beam, independent of the ground's slope: a flashlight at head
+ * height hits far, flat ground at a grazing angle, which real lighting leaves nearly black.
+ */
+const BEAM_GLOW = 0.5;
 /** Width of the soft edge around revealed ground, in world units. */
 const FOG_EDGE = 0.9;
 
@@ -212,6 +217,12 @@ export class Terrain {
     uDay: { value: 0 },
     uGlow: { value: 1 },
     uGrain: { value: GRAIN },
+    // The flashlight: where it is, where it points, its cone (cos of the half angle) and range.
+    uSpillPos: { value: new THREE.Vector3() },
+    uSpillDir: { value: new THREE.Vector3(0, -1, 0) },
+    uSpillCos: { value: 1 },
+    uSpillRange: { value: 0 },
+    uSpillNear: { value: 0 },
   };
   /**
    * Night light multiplier for the current palette: pale ground (snow, desert) gets a dimmer
@@ -370,6 +381,20 @@ export class Terrain {
       }
   }
 
+  /**
+   * The flashlight, so its light shows on ground it hasn't revealed: fully out to `near` (where
+   * it's aimed), then fading to nothing at `range`. Null when off.
+   */
+  setSpill(light: { pos: THREE.Vector3; dir: THREE.Vector3; angle: number; near: number; range: number } | null) {
+    const u = this.uniforms;
+    u.uSpillRange.value = light ? light.range : 0;
+    if (!light) return;
+    u.uSpillNear.value = light.near;
+    u.uSpillPos.value.copy(light.pos);
+    u.uSpillDir.value.copy(light.dir).normalize();
+    u.uSpillCos.value = Math.cos(light.angle);
+  }
+
   /** Daylight: the whole surface is visible; fog of war then only applies to the minimap. */
   setLit(lit: boolean) {
     this.uniforms.uDay.value = lit ? 1 : 0;
@@ -494,6 +519,11 @@ export class Terrain {
           uniform float uDay;
           uniform float uGlow;
           uniform float uGrain;
+          uniform vec3 uSpillPos;
+          uniform vec3 uSpillDir;
+          uniform float uSpillCos;
+          uniform float uSpillRange;
+          uniform float uSpillNear;
           float grainHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
           float valueNoise(vec2 p) {
             vec2 i = floor(p), f = fract(p);
@@ -516,7 +546,17 @@ export class Terrain {
           vec2 fogUv = ((vXZ / uSize + 0.5) * (uFogRes - 1.0) + 0.5) / uFogRes;
           float seen = smoothstep(0.0, 1.0, texture2D(uFog, fogUv).r);
           float fogK = mix(uUnexplored + (1.0 - uUnexplored) * seen, 1.0, uDay);
-          diffuseColor.rgb *= grain * fogK;`,
+          // The flashlight lights unrevealed ground in its cone as it does revealed ground, fully
+          // out to where it's aimed and then fading away to the end of its range, so the beam
+          // reads as one light (only the pool where it lands reveals, though).
+          vec3 toP = vec3(vXZ.x, vH, vXZ.y) - uSpillPos;
+          float spillD = length(toP);
+          float cone = uSpillRange > 0.0
+            ? smoothstep(uSpillCos, mix(uSpillCos, 1.0, 0.5), dot(toP / max(spillD, 1e-4), uSpillDir)) : 0.0;
+          float beamLit = cone * (1.0 - smoothstep(uSpillNear, uSpillRange, spillD));
+          float litBase = max(uUnexplored, beamLit);
+          diffuseColor.rgb *= grain * mix(litBase + (1.0 - litBase) * seen, 1.0, uDay);
+          float beamGlow = cone * max(0.0, 1.0 - spillD / max(uSpillRange, 1e-4)) * (1.0 - uDay);`,
         )
         .replace(
           '#include <emissivemap_fragment>',
@@ -526,6 +566,7 @@ export class Terrain {
           float hc = vH * uContour;
           float line = uLines * (1.0 - min(abs(fract(hc - 0.5) - 0.5) / fwidth(hc), 1.0));
           totalEmissiveRadiance += vColor.rgb * grain * fogK * uGlow * (1.0 - uDay) * (0.22 + 0.9 * line);
+          totalEmissiveRadiance += vColor.rgb * grain * uGlow * ${BEAM_GLOW.toFixed(2)} * beamGlow * max(litBase, seen);
           diffuseColor.rgb *= 1.0 - uDay * 0.45 * line;`,
         );
     };

@@ -167,7 +167,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
   touch-action: none;
   user-select: none;
 }
-.pad button.held { background: var(--accent); color: var(--accent-ink); }
+.pad button.held { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.pad button.wide { grid-column: 1 / -1; }
 
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 8px 0 0; font-size: 12px; }
 .keys dt { white-space: nowrap; }

@@ -40,6 +40,8 @@ const FLASH_POOL = 0.42;
 const FLASH_MIN_AIM = 1.5;
 /** Width of the beam's soft rim in the 3-D view, as a fraction of the pool's radius. */
 const FLASH_EDGE = 0.8;
+/** How far the flashlight's light carries, as a multiple of the beam's reach (it only reveals the beam). */
+const FLASH_SPILL = 3;
 type LightKind = 'lantern' | 'flashlight';
 /** Optimizer playback speed, steps per second: the slider runs log-scaled between these. */
 const OPT_SPEED_MIN = 5, OPT_SPEED_MAX = 600;
@@ -184,6 +186,7 @@ function applyPrefs() {
   // With the flashlight, the lantern stays as a faint glow around you, without its shadow.
   avatar.lantern.castShadow = !flash;
   avatar.flashlight.visible = flash;
+  if (!flash) terrain.setSpill(null);
   revealYaw = NaN; // re-reveal with the new light on the next frame
   hemi.color.set(day ? '#dbe9ff' : '#4a5a9a');
   hemi.groundColor.set(day ? '#5a4a3a' : '#08080f');
@@ -903,13 +906,17 @@ $('show-global').onclick = (e) => {
   b.textContent = showGlobal ? '★ Hide global minima' : '★ Show global minima';
 };
 
-// On-screen movement pad (touch / mouse).
-for (const b of document.querySelectorAll<HTMLButtonElement>('.pad button')) {
+// On-screen movement pad (touch / mouse). Its keys light up while held, from here or the keyboard.
+const padButtons = [...document.querySelectorAll<HTMLButtonElement>('.pad button')];
+for (const b of padButtons) {
   const a = b.dataset.action!;
-  const up = () => (player.held.delete(a), b.classList.remove('held'));
-  b.onpointerdown = (e) => (b.setPointerCapture(e.pointerId), player.held.add(a), b.classList.add('held'));
+  const up = () => player.held.delete(a);
+  b.onpointerdown = (e) => (b.setPointerCapture(e.pointerId), player.held.add(a));
   b.onpointerup = up;
   b.onpointercancel = up;
+}
+function syncPad() {
+  for (const b of padButtons) b.classList.toggle('held', player.held.has(b.dataset.action!));
 }
 
 // ---------- loop ----------
@@ -941,8 +948,15 @@ let revealReach = NaN;
  */
 const beamAim = { reach: 0, pool: 0, x: 0, z: 0 };
 const aimDir = new THREE.Vector3();
+/**
+ * The aim distance, eased toward where the view ray lands. Looking across a crest flips the
+ * landing spot between the near slope and the ground far behind it; easing makes the pool
+ * glide between them instead of jumping (and the light with it).
+ */
+let beamDist = NaN;
+const BEAM_EASE = 7; // per second
 
-function updateBeamAim(pos: THREE.Vector3) {
+function updateBeamAim(pos: THREE.Vector3, dt: number) {
   // The farthest the pool can land, with its far rim at the full reach.
   const far = (prefs.revealRadius * FLASH_REACH) / (1 + FLASH_POOL);
   let d = far;
@@ -959,6 +973,8 @@ function updateBeamAim(pos: THREE.Vector3) {
         break;
       }
   }
+  beamDist = Number.isNaN(beamDist) ? d : beamDist + (d - beamDist) * (1 - Math.exp(-BEAM_EASE * dt));
+  d = beamDist;
   beamAim.pool = Math.max(FLASH_FOOT, FLASH_POOL * d);
   beamAim.reach = d + beamAim.pool;
   beamAim.x = pos.x + Math.sin(player.yaw) * d;
@@ -996,12 +1012,18 @@ function aimFlashlight(lantern: number) {
   // A wide cone with the full penumbra fades smoothly from the middle out, so the pool has no
   // hard rim, and the lantern's faint glow keeps the ground around it from going black.
   f.angle = FLASH_HALF * 1.7;
-  f.distance = reach * 2;
-  // Light spills past the revealed beam, fading out by twice its reach. It doesn't dim with
-  // distance before that, so the pool is equally bright near or far and never glares up close.
-  f.intensity = lantern * 0.06;
+  // The light carries on past the revealed beam, fading with distance (1/d) and out by
+  // FLASH_SPILL times its reach. Its strength is set so the pool you aim at is equally bright
+  // near or far, which keeps it from glaring when you look down at your feet.
+  f.distance = reach * FLASH_SPILL;
+  const toPool = Math.hypot(beamAim.x - avatar.group.position.x, f.target.position.y - avatar.group.position.y - f.position.y, beamAim.z - avatar.group.position.z);
+  f.intensity = lantern * 0.06 * toPool;
   avatar.lantern.intensity *= 0.3;
+  // Unrevealed ground in the cone shows that light too, fading out past the pool (see Terrain.setSpill).
+  spillPos.copy(avatar.group.position).add(f.position);
+  terrain.setSpill({ pos: spillPos, dir: spillDir.subVectors(f.target.position, spillPos), angle: f.angle, near: toPool + beamAim.pool, range: f.distance });
 }
+const spillPos = new THREE.Vector3(), spillDir = new THREE.Vector3();
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -1022,7 +1044,7 @@ function frame() {
   walked += moved;
   if (introUntil && (t > introUntil.t || walked > introUntil.walked)) hideIntro();
   // The flashlight reveals as you turn, not just as you walk.
-  if (prefs.light === 'flashlight') updateBeamAim(pos);
+  if (prefs.light === 'flashlight') updateBeamAim(pos, dt);
   const turned = Number.isNaN(revealYaw) ||
     (prefs.light === 'flashlight' &&
       (Math.abs(wrapAngle(player.yaw - revealYaw)) > 0.004 || Math.abs(beamAim.reach - revealReach) > 0.05));
@@ -1080,6 +1102,7 @@ function frame() {
   }
 
   updateOptPointer();
+  syncPad();
   minimap.draw(terrain, minimapState());
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
