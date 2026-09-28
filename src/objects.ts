@@ -55,7 +55,7 @@ export function makeAvatar() {
 
   // The flashlight, for the beam reveal: held at head height, aimed each frame at the ground
   // ahead (its target lives in world space, so it has to be added to the scene).
-  const flashlight = new THREE.SpotLight('#ffe6c4', 0, 60, 0.5, 1, 1);
+  const flashlight = new THREE.SpotLight('#ffe6c4', 0, 60, 0.5, 1, 0);
   flashlight.position.set(0, 1.7, 0);
   flashlight.visible = false;
   flashlight.castShadow = true;

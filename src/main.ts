@@ -19,7 +19,7 @@ import {
   type OptimizerId,
   type Point2,
 } from './landscapes';
-import { MAP_SIZES, THEMES, Terrain, shapeDistance, themeSwatch, type MapSizeId, type RevealShape, type TerrainStyle } from './terrain';
+import { MAP_SIZES, THEMES, Terrain, themeSwatch, type MapSizeId, type RevealShape, type TerrainStyle } from './terrain';
 import { PlayerController, wrapAngle, type ViewMode } from './controls';
 import { Trail, makeAvatar, makeBeacon, makeStars } from './objects';
 import { Minimap, sectorName } from './minimap';
@@ -352,8 +352,6 @@ function respawn() {
   trailPts = [];
   clearOpt();
   found.clear();
-  spotCache.clear();
-  spotQueue = [];
   localBeacons.clear();
   foundBeacons.clear();
   updateProgress();
@@ -392,54 +390,6 @@ function detectMinimum() {
   const mw = terrain.fnToWorld(m.x, m.z);
   if (Math.hypot(mw.x - player.pos.x, mw.z - player.pos.z) > detectRadius) return;
   recordMinimum(m, mw);
-}
-
-/**
- * Spotting with the flashlight: a local minimum inside the lit beam counts as found (the global
- * minimum only counts once you walk up to it, via detectMinimum). The beam is
- * covered with seeds on a fixed world grid; each slides downhill to its own minimum. Results are
- * cached per grid cell (sweeping back over ground is free) and new cells are worked through a
- * little each frame, since on Wilds each slide is fairly expensive.
- */
-const SPOT_CELL = 1.5;
-const spotCache = new Map<string, { m: LocalMin; mw: Point2 } | null>();
-let spotQueue: { key: string; x: number; z: number }[] = [];
-
-function queueBeamSeeds(beam: RevealShape) {
-  const lit = shapeDistance(beam);
-  spotQueue = [];
-  const r = beam.radius, i0 = Math.floor((beam.x - r) / SPOT_CELL), i1 = Math.ceil((beam.x + r) / SPOT_CELL);
-  const j0 = Math.floor((beam.z - r) / SPOT_CELL), j1 = Math.ceil((beam.z + r) / SPOT_CELL);
-  for (let i = i0; i <= i1; i++)
-    for (let j = j0; j <= j1; j++) {
-      const x = (i + 0.5) * SPOT_CELL, z = (j + 0.5) * SPOT_CELL;
-      if (lit(x, z) <= 0) continue;
-      const key = `${i},${j}`;
-      const hit = spotCache.get(key);
-      if (hit === undefined) spotQueue.push({ key, x, z });
-      else if (hit && lit(hit.mw.x, hit.mw.z) > 0) spotMinimum(hit);
-    }
-  // Nearest first: that's where you're looking most closely.
-  spotQueue.sort((a, b) => Math.hypot(b.x - beam.x, b.z - beam.z) - Math.hypot(a.x - beam.x, a.z - beam.z));
-}
-
-function processBeamSeeds(budgetMs: number) {
-  const beam = flashlightShape(player.pos);
-  if (!beam) return void (spotQueue = []);
-  const lit = shapeDistance(beam);
-  const t0 = performance.now();
-  while (spotQueue.length && performance.now() - t0 < budgetMs) {
-    const s = spotQueue.pop()!;
-    const sp = terrain.worldToFn(s.x, s.z);
-    const m = findLocalMin(L, sp.x, sp.z);
-    const hit = m.converged ? { m, mw: terrain.fnToWorld(m.x, m.z) } : null;
-    spotCache.set(s.key, hit);
-    if (hit && lit(hit.mw.x, hit.mw.z) > 0) spotMinimum(hit);
-  }
-}
-
-function spotMinimum(hit: { m: LocalMin; mw: Point2 }) {
-  if (!isGlobalMin(hit.m)) recordMinimum(hit.m, hit.mw);
 }
 
 /** A minimum just off the map edge can leave near-zero loss at the edge; only on-map ones count. */
@@ -860,7 +810,6 @@ window.addEventListener('keydown', (e) => {
     e.code === 'Enter' ? newGame() : hideWin();
     return;
   }
-  if (e.code === 'KeyL') setPrefs({ lights: !prefs.lights });
   if (e.code === 'KeyP') setPrefs({ path: !prefs.path });
   if (e.code === 'KeyF') setPrefs({ light: prefs.light === 'lantern' ? 'flashlight' : 'lantern' });
   if (e.code === 'KeyO') toggleFullscreen();
@@ -956,37 +905,53 @@ const aimDir = new THREE.Vector3();
 let beamDist = NaN;
 const BEAM_EASE = 7; // per second
 
+/**
+ * A point the light itself points at, which isn't always the pool: in first person it shines
+ * straight along your view (at a far hillside, say), even past where the pool can land. How
+ * bright things get depends only on their distance and on the view direction, never on what the
+ * middle of the view happens to hit, so small movements over rugged ground give small changes.
+ */
+const lightAim = new THREE.Vector3();
+const lightRange = () => prefs.revealRadius * FLASH_REACH * FLASH_SPILL;
+
 function updateBeamAim(pos: THREE.Vector3, dt: number) {
   // The farthest the pool can land, with its far rim at the full reach.
   const far = (prefs.revealRadius * FLASH_REACH) / (1 + FLASH_POOL);
+  const ease = (from: number, to: number) =>
+    Number.isNaN(from) ? to : from + (to - from) * (1 - Math.exp(-BEAM_EASE * dt));
   let d = far;
   if (player.mode === 'first') {
     camera.getWorldDirection(aimDir);
-    const o = camera.position, flat = Math.hypot(aimDir.x, aimDir.z);
-    // March along the view ray until it dips below the ground; looking at the sky or past
-    // the farthest landing spot aims it as far as it goes.
-    if (aimDir.y < 0 && flat > 1e-6)
-      for (let t = 0.25; t * flat <= far; t += 0.25) {
-        const x = o.x + aimDir.x * t, z = o.z + aimDir.z * t;
-        if (o.y + aimDir.y * t > terrain.heightAt(x, z)) continue;
-        d = Math.max(FLASH_MIN_AIM, t * flat);
-        break;
-      }
+    const o = camera.position, flat = Math.hypot(aimDir.x, aimDir.z), range = lightRange();
+    // March along the view ray until it meets the ground. The pool lands there if that's close
+    // enough, and otherwise as far out as it goes.
+    for (let t = 0.25; t * flat <= far && t <= range; t += 0.25) {
+      const x = o.x + aimDir.x * t, z = o.z + aimDir.z * t;
+      if (o.y + aimDir.y * t > terrain.heightAt(x, z)) continue;
+      d = Math.max(FLASH_MIN_AIM, t * flat);
+      break;
+    }
+    lightAim.copy(o).addScaledVector(aimDir, 10);
   }
-  beamDist = Number.isNaN(beamDist) ? d : beamDist + (d - beamDist) * (1 - Math.exp(-BEAM_EASE * dt));
+  beamDist = ease(beamDist, d);
   d = beamDist;
   beamAim.pool = Math.max(FLASH_FOOT, FLASH_POOL * d);
   beamAim.reach = d + beamAim.pool;
   beamAim.x = pos.x + Math.sin(player.yaw) * d;
   beamAim.z = pos.z + Math.cos(player.yaw) * d;
+  if (player.mode !== 'first') {
+    // Third person: the light points at the pool.
+    lightAim.set(beamAim.x, terrain.heightAt(beamAim.x, beamAim.z), beamAim.z);
+  }
 }
 
 function revealAround(pos: THREE.Vector3) {
   revealYaw = player.yaw;
   revealReach = beamAim.reach;
+  // Only what can be seen from the light, not ground hidden behind a rise.
   const beam = flashlightShape(pos);
-  if (beam) terrain.revealShape(beam);
-  else terrain.reveal(pos.x, pos.z, prefs.revealRadius);
+  if (beam) terrain.revealShape({ ...beam, eye: pos.y + avatar.flashlight.position.y });
+  else terrain.revealShape({ x: pos.x, z: pos.z, radius: prefs.revealRadius, eye: pos.y + avatar.lantern.position.y });
 }
 
 /** The flashlight's lit area right now, or null with the lantern. */
@@ -1006,22 +971,22 @@ function flashlightShape(pos: Point2): RevealShape | null {
 
 /** Points the spotlight down the beam, onto the ground about two thirds of the way out. */
 function aimFlashlight(lantern: number) {
-  const f = avatar.flashlight, reach = beamAim.reach;
-  f.target.position.set(beamAim.x, terrain.heightAt(beamAim.x, beamAim.z), beamAim.z);
+  const f = avatar.flashlight;
+  f.target.position.copy(lightAim);
   f.color.copy(terrain.lanternColor);
   // A wide cone with the full penumbra fades smoothly from the middle out, so the pool has no
   // hard rim, and the lantern's faint glow keeps the ground around it from going black.
   f.angle = FLASH_HALF * 1.7;
-  // The light carries on past the revealed beam, fading with distance (1/d) and out by
-  // FLASH_SPILL times its reach. Its strength is set so the pool you aim at is equally bright
-  // near or far, which keeps it from glaring when you look down at your feet.
-  f.distance = reach * FLASH_SPILL;
-  const toPool = Math.hypot(beamAim.x - avatar.group.position.x, f.target.position.y - avatar.group.position.y - f.position.y, beamAim.z - avatar.group.position.z);
-  f.intensity = lantern * 0.06 * toPool;
+  // The light carries on past the revealed beam, out to FLASH_SPILL times the full beam reach.
+  // It doesn't dim with distance until it nears that end, where it fades out smoothly, so it
+  // never glares up close.
+  f.distance = lightRange();
+  f.intensity = lantern * 0.06;
   avatar.lantern.intensity *= 0.3;
-  // Unrevealed ground in the cone shows that light too, fading out past the pool (see Terrain.setSpill).
+  // Unrevealed ground in the cone shows that light too, fully out to the beam's reach and then
+  // fading (see Terrain.setSpill).
   spillPos.copy(avatar.group.position).add(f.position);
-  terrain.setSpill({ pos: spillPos, dir: spillDir.subVectors(f.target.position, spillPos), angle: f.angle, near: toPool + beamAim.pool, range: f.distance });
+  terrain.setSpill({ pos: spillPos, dir: spillDir.subVectors(lightAim, spillPos), angle: f.angle, near: prefs.revealRadius * FLASH_REACH, range: f.distance });
 }
 const spillPos = new THREE.Vector3(), spillDir = new THREE.Vector3();
 
@@ -1049,9 +1014,6 @@ function frame() {
     (prefs.light === 'flashlight' &&
       (Math.abs(wrapAngle(player.yaw - revealYaw)) > 0.004 || Math.abs(beamAim.reach - revealReach) > 0.05));
   if (moved > 0 || turned || trailPts.length === 0) revealAround(pos);
-  const beam = (moved > 0 || turned) && flashlightShape(pos);
-  if (beam) queueBeamSeeds(beam);
-  processBeamSeeds(1.5);
   if (moved > 0 || trailPts.length === 0) {
     movedSinceDetect = true;
     const last = trailPts[trailPts.length - 1];

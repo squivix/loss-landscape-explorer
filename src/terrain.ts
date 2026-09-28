@@ -105,6 +105,8 @@ const UNEXPLORED = 0.035;
  * height hits far, flat ground at a grazing angle, which real lighting leaves nearly black.
  */
 const BEAM_GLOW = 0.5;
+/** Line of sight: ray spacing along the ground and across, and the softness of the horizon (rise over run). */
+const SIGHT_STEP = 0.25, SIGHT_SPREAD = 0.3, SIGHT_SOFT = 0.02;
 /** Width of the soft edge around revealed ground, in world units. */
 const FOG_EDGE = 0.9;
 
@@ -113,6 +115,7 @@ const FOG_EDGE = 0.9;
  * flashlight beam: a teardrop from a small circle of radius `foot` where you stand, widening
  * smoothly to a round pool of radius `pool` where the light lands, `radius` out in total along
  * `dir` (a unit vector). `edge` widens the soft fade at its rim in the 3-D view (default FOG_EDGE).
+ * With `eye` (the world height of the eye at (x, z)), only ground in line of sight is revealed.
  */
 export interface RevealShape {
   x: number;
@@ -122,6 +125,7 @@ export interface RevealShape {
   foot?: number;
   pool?: number;
   edge?: number;
+  eye?: number;
 }
 
 interface Bounds { x0: number; x1: number; z0: number; z1: number }
@@ -621,10 +625,12 @@ export class Terrain {
     this.revealShape({ x: wx, z: wz, radius });
   }
 
-  /** Reveals a disc or a flashlight beam (see RevealShape). */
+  /** Reveals a disc or a flashlight beam (see RevealShape), only what's in sight with `eye`. */
   revealShape(shape: RevealShape) {
     const sd = shapeDistance(shape);
     const b = shapeBounds(shape);
+    const edge = Math.max(FOG_EDGE, shape.edge ?? 0);
+    const sight = shape.eye === undefined ? null : this.lineOfSight(shape.x, shape.z, shape.eye, shape.radius, sd, edge / 2);
     const N = this.grid, S = this.size, step = S / (N - 1);
     const x0 = Math.max(0, Math.floor((b.x0 / S + 0.5) * (N - 1)));
     const x1 = Math.min(N - 1, Math.ceil((b.x1 / S + 0.5) * (N - 1)));
@@ -636,17 +642,19 @@ export class Terrain {
     for (let iz = z0; iz <= z1; iz++) {
       const pz = iz * step - S / 2;
       for (let ix = x0; ix <= x1; ix++) {
-        const d = sd(ix * step - S / 2, pz);
+        const px = ix * step - S / 2, d = sd(px, pz);
         if (d <= 0) continue;
-        const v = Math.min(1, d / soft);
         const i = iz * N + ix;
+        let v = Math.min(1, d / soft);
+        if (v <= this.explored[i]) continue; // already this explored, in sight or not
+        if (sight) v *= sight(px, pz);
         if (v <= this.explored[i]) continue;
         if (this.explored[i] < 0.5 && v >= 0.5) this.exploredCount++;
         this.explored[i] = v;
         changed = true;
       }
     }
-    this.revealFog(sd, b, Math.max(FOG_EDGE, shape.edge ?? 0));
+    this.revealFog(sd, b, edge, sight);
     if (!changed) return;
     // Revealed ground must exist (the minimap shows its colors).
     for (const ch of this.chunks) {
@@ -660,7 +668,7 @@ export class Terrain {
    * Stamps a shape into the fog texture as a linear ramp `edge` wide, centered on its rim.
    * Bilinear filtering reproduces a linear ramp exactly, so the rendered edge is a clean curve.
    */
-  private revealFog(sd: (x: number, z: number) => number, b: Bounds, edge: number) {
+  private revealFog(sd: (x: number, z: number) => number, b: Bounds, edge: number, sight: ((x: number, z: number) => number) | null) {
     const F = this.fogRes, S = this.size, texel = S / (F - 1), pad = edge / 2;
     const x0 = Math.max(0, Math.floor(((b.x0 - pad) / S + 0.5) * (F - 1)));
     const x1 = Math.min(F - 1, Math.ceil(((b.x1 + pad) / S + 0.5) * (F - 1)));
@@ -670,10 +678,12 @@ export class Terrain {
     for (let iz = z0; iz <= z1; iz++) {
       const pz = iz * texel - S / 2;
       for (let ix = x0; ix <= x1; ix++) {
-        const d = sd(ix * texel - S / 2, pz);
+        const px = ix * texel - S / 2, d = sd(px, pz);
         if (d <= -pad) continue;
-        const v = Math.round(255 * Math.min(1, d / edge + 0.5));
         const i = iz * F + ix;
+        const full = Math.min(1, d / edge + 0.5);
+        if (Math.round(255 * full) <= this.fogData[i]) continue; // already this revealed
+        const v = Math.round(255 * full * (sight ? sight(px, pz) : 1));
         if (v > this.fogData[i]) {
           this.fogData[i] = v;
           changed = true;
@@ -681,6 +691,46 @@ export class Terrain {
       }
     }
     if (changed) this.fogTex.needsUpdate = true;
+  }
+
+  /**
+   * What an eye at height `eyeY` over (ex, ez) can see of the ground in a convex shape around
+   * it (signed distance `sd`, reaching at most `radius` out, plus `pad`). Rays fan out from the
+   * eye, each tracking the steepest rise it has passed (its horizon); ground that sits below
+   * that horizon is hidden behind it. Returns visibility 0..1 at a point, soft at the horizon
+   * and blended between neighboring rays and steps.
+   */
+  private lineOfSight(ex: number, ez: number, eyeY: number, radius: number, sd: (x: number, z: number) => number, pad: number) {
+    const R = radius + pad + SIGHT_STEP;
+    const S = Math.ceil(R / SIGHT_STEP) + 2;
+    const N = Math.min(720, Math.max(48, Math.ceil((2 * Math.PI * R) / SIGHT_SPREAD)));
+    const vis = new Float32Array(N * S);
+    for (let k = 0; k < N; k++) {
+      const a = (2 * Math.PI * k) / N, dx = Math.sin(a), dz = Math.cos(a);
+      let horizon = -Infinity, v = 1, i = 0;
+      vis[k * S] = 1;
+      // The shape is convex and holds the eye, so each ray leaves it once: stop just past that.
+      for (i = 1; i < S; i++) {
+        const r = i * SIGHT_STEP, x = ex + dx * r, z = ez + dz * r;
+        if (sd(x, z) < -pad - SIGHT_STEP) break;
+        const e = (this.heightAt(x, z) - eyeY) / r;
+        const t = Math.min(1, Math.max(0, (e - horizon) / (2 * SIGHT_SOFT) + 0.5));
+        v = t * t * (3 - 2 * t);
+        vis[k * S + i] = v;
+        if (e > horizon) horizon = e;
+      }
+      for (; i < S; i++) vis[k * S + i] = v;
+    }
+    return (x: number, z: number) => {
+      const dx = x - ex, dz = z - ez, r = Math.hypot(dx, dz);
+      if (r < SIGHT_STEP) return 1;
+      let a = (Math.atan2(dx, dz) / (2 * Math.PI)) * N;
+      if (a < 0) a += N;
+      const k0 = Math.floor(a) % N, k1 = (k0 + 1) % N, fa = a - Math.floor(a);
+      const fi = Math.min(S - 1.001, r / SIGHT_STEP), i0 = Math.floor(fi), fr = fi - i0;
+      const at = (k: number) => vis[k * S + i0] + (vis[k * S + i0 + 1] - vis[k * S + i0]) * fr;
+      return at(k0) + (at(k1) - at(k0)) * fa;
+    };
   }
 
   resetFog() {

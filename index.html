@@ -55,6 +55,9 @@
             <div class="segmented four" id="min-at"></div>
             <p class="muted small" id="min-hint"></p>
           </div>
+          <label class="check">
+            <input type="checkbox" id="local-mins" /> Highlight local minima found
+          </label>
           <button id="respawn" class="ghost">New game</button>
         </section>
 
@@ -68,7 +71,7 @@
             <input type="checkbox" id="contours" /> Contour lines
           </label>
           <label class="check">
-            <input type="checkbox" id="lights" /> Daytime <kbd>L</kbd>
+            <input type="checkbox" id="lights" /> Daytime
           </label>
           <label class="check">
             <input type="checkbox" id="show-path" checked /> Show my path <kbd>P</kbd>
@@ -85,12 +88,9 @@
             <span><span id="light-radius-label">Light radius</span> <output id="light-radius-out"></output></span>
             <input type="range" id="light-radius" min="1" max="12" step="0.1" value="4.5" />
           </label>
-          <label class="slider" title="How close you have to get to a minimum for it to count as found. With the flashlight, local minima inside the beam count too; the global minimum only counts once you walk up to it.">
+          <label class="slider" title="How close you have to walk to a minimum for it to count as found.">
             <span>Counts as found within <output id="det-out" class="mono"></output></span>
             <input type="range" id="det" min="0.25" max="4" step="0.25" value="1" />
-          </label>
-          <label class="check">
-            <input type="checkbox" id="local-mins" /> Highlight local minima found
           </label>
         </section>
 
