@@ -107,6 +107,58 @@ export class Trail {
   }
 }
 
+/**
+ * A flat arrow lying on the ground and draped over it (sampled along its length), so it
+ * doesn't cut into bumps or float over hollows.
+ */
+export class GroundArrow {
+  readonly mesh: THREE.Mesh;
+  private positions: Float32Array;
+  private static readonly SAMPLES = 10; // along the shaft
+
+  constructor(
+    color: string,
+    private opts = { start: 0.45, length: 2, width: 0.12, headLength: 0.5, headWidth: 0.44, lift: 0.1 },
+  ) {
+    const n = GroundArrow.SAMPLES;
+    this.positions = new Float32Array((2 * n + 3) * 3);
+    const index: number[] = [];
+    for (let i = 0; i < n - 1; i++) index.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
+    index.push(2 * n, 2 * n + 1, 2 * n + 2);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(index);
+    this.mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    this.mesh.frustumCulled = false;
+  }
+
+  /** Lays the arrow from (x, z) along the unit direction (ux, uz), shrunk by `scale` (0..1). */
+  update(heightAt: (x: number, z: number) => number, x: number, z: number, ux: number, uz: number, scale = 1) {
+    const { start, lift } = this.opts;
+    const length = this.opts.length * scale, width = this.opts.width * scale;
+    const headLength = this.opts.headLength * scale, headWidth = this.opts.headWidth * scale;
+    const n = GroundArrow.SAMPLES, P = this.positions;
+    const px = -uz, pz = ux; // across the arrow
+    const put = (i: number, s: number, w: number) => {
+      const cx = x + ux * s + px * w, cz = z + uz * s + pz * w;
+      P.set([cx, heightAt(cx, cz) + lift, cz], i * 3);
+    };
+    const shaftEnd = start + length - headLength;
+    for (let i = 0; i < n; i++) {
+      const s = start + ((shaftEnd - start) * i) / (n - 1);
+      put(2 * i, s, width / 2);
+      put(2 * i + 1, s, -width / 2);
+    }
+    put(2 * n, shaftEnd, headWidth / 2);
+    put(2 * n + 1, shaftEnd, -headWidth / 2);
+    put(2 * n + 2, start + length, 0);
+    (this.mesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+  }
+}
+
 /** A tall column of light marking a minimum, visible from across the map. */
 export function makeBeacon(color: string) {
   const g = new THREE.Group();

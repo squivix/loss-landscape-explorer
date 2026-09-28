@@ -54,6 +54,10 @@ it's in view, or as an arrow at the edge of the view when it's off screen or beh
 - **Prefer wide valleys (SAM)**: sharpness-aware minimization, which steps using the slope a little
   way uphill so narrow pits barely register.
 
+To see which way they'd go, "Gradient arrow" (under Appearance) lays an arrow on the ground at
+your feet pointing downhill, along −∇, the direction of a plain gradient descent step. It hides
+on flat ground.
+
 None of them is a sure thing: noise does wonders on Ackley, schedules help in Rosenbrock's valley,
 SAM helps on Beale but zigzags in Rosenbrock, and nothing much rescues Rastrigin. Jumpy runs can
 leave a good spot behind, so the result line also reports the best loss seen.

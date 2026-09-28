@@ -21,7 +21,7 @@ import {
 } from './landscapes';
 import { MAP_SIZES, THEMES, Terrain, themeSwatch, type MapSizeId, type RevealShape, type TerrainStyle } from './terrain';
 import { PlayerController, wrapAngle, type ViewMode } from './controls';
-import { Trail, makeAvatar, makeBeacon, makeStars } from './objects';
+import { GroundArrow, Trail, makeAvatar, makeBeacon, makeStars } from './objects';
 import { Minimap, sectorName } from './minimap';
 import { startTour, tourSeen } from './tour';
 
@@ -45,6 +45,7 @@ const FLASH_SPILL = 3;
 type LightKind = 'lantern' | 'flashlight';
 /** Optimizer playback speed, steps per second: the slider runs log-scaled between these. */
 const OPT_SPEED_MIN = 5, OPT_SPEED_MAX = 600;
+const GRAD_FULL_SLOPE = 0.6; // rise per unit (about 30°) at which the gradient arrow is full size
 const TRAIL_OFFSET = 0.12;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -92,6 +93,8 @@ scene.add(avatar.group, avatar.flashlight.target);
 const trail = new Trail('#19e0ff', 40000, 0.75);
 const optTrail = new Trail('#ff406e', 200000, 0.95);
 scene.add(trail.line, optTrail.line);
+const gradArrow = new GroundArrow('#c6ff4a');
+scene.add(gradArrow.mesh);
 const optHead = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), new THREE.MeshBasicMaterial({ color: '#ff406e' }));
 optHead.add(new THREE.PointLight('#ff406e', 12, 8, 1.5));
 optHead.visible = false;
@@ -143,7 +146,7 @@ let detectTimer = 0;
 let movedSinceDetect = true;
 
 const PREFS_KEY = 'lle.prefs';
-const prefs = { lights: false, path: true, minAt: 'random' as MinPlacement, minU: 0.5, minV: 0.5, localMins: false, mapSize: 'medium' as MapSizeId, revealRadius: REVEAL_RADIUS, mouseLookFirst: true, mouseLookThird: false, hills: true, light: 'flashlight' as LightKind, schedule: 'constant' as Schedule, noise: 0, sam: false, optSpeed: 10, optWatch: true, defaults: 3 };
+const prefs = { lights: false, path: true, minAt: 'random' as MinPlacement, minU: 0.5, minV: 0.5, localMins: false, mapSize: 'medium' as MapSizeId, revealRadius: REVEAL_RADIUS, mouseLookFirst: true, mouseLookThird: false, hills: true, light: 'flashlight' as LightKind, schedule: 'constant' as Schedule, noise: 0, sam: false, optSpeed: 10, optWatch: true, gradArrow: false, defaults: 3 };
 /**
  * Every pref gets saved, so an old default is indistinguishable from a choice. When the defaults
  * change, prefs saved under the old ones drop the values that still match those old defaults.
@@ -218,6 +221,7 @@ function applyPrefs() {
   renderKeyHelp();
   $<HTMLInputElement>('lights').checked = day;
   $<HTMLInputElement>('show-path').checked = prefs.path;
+  $<HTMLInputElement>('grad-arrow').checked = prefs.gradArrow;
 }
 
 const STYLE_KEY = 'lle.terrainStyle';
@@ -321,7 +325,27 @@ function renderPlacement() {
     b.classList.toggle('active', b.dataset.id === prefs.minAt);
   $('min-hint').textContent = PLACEMENTS.find((p) => p.id === prefs.minAt)!.hint;
   $('minimap').classList.toggle('picking', prefs.minAt === 'pick');
-  $('respawn').textContent = prefs.minAt === 'random' ? 'New game (new terrain & minimum)' : 'New game (new terrain)';
+  $('respawn').title = prefs.minAt === 'random' ? 'New terrain and a new spot for the global minimum' : 'New terrain';
+}
+
+/**
+ * The −∇ arrow at your feet. Every landscape spans the same range in x and z and the ground's
+ * height rises with the loss, so downhill on screen is the loss's own downhill direction.
+ */
+function updateGradArrow(pos: THREE.Vector3) {
+  gradArrow.mesh.visible = false;
+  if (!prefs.gradArrow) return;
+  const p = terrain.worldToFn(pos.x, pos.z);
+  const g = gradient(L, p.x, p.z);
+  const m = Math.hypot(g.x, g.z);
+  if (!(m > 0)) return;
+  const ux = -g.x / m, uz = -g.z / m;
+  // Sized by how steep the ground is here: full from about 30°, shrinking toward flat ground,
+  // and hidden once it's (visibly) flat, where the direction is just noise.
+  const slope = (terrain.heightAt(pos.x, pos.z) - terrain.heightAt(pos.x + ux * 0.3, pos.z + uz * 0.3)) / 0.3;
+  if (slope < 0.01) return;
+  gradArrow.update((x, z) => terrain.heightAt(x, z), pos.x, pos.z, ux, uz, Math.min(1, Math.sqrt(slope / GRAD_FULL_SLOPE)));
+  gradArrow.mesh.visible = true;
 }
 
 /** "Play again": fresh terrain variety and spawn, and a fresh minimum location when it's random. */
@@ -782,6 +806,7 @@ $<HTMLInputElement>('solid-color').oninput = (e) => setStyle({ solid: (e.target 
 $<HTMLInputElement>('contours').onchange = (e) => setStyle({ contours: (e.target as HTMLInputElement).checked });
 $<HTMLInputElement>('lights').onchange = (e) => setPrefs({ lights: (e.target as HTMLInputElement).checked });
 $<HTMLInputElement>('show-path').onchange = (e) => setPrefs({ path: (e.target as HTMLInputElement).checked });
+$<HTMLInputElement>('grad-arrow').onchange = (e) => setPrefs({ gradArrow: (e.target as HTMLInputElement).checked });
 // ---------- full screen ----------
 
 // The 3-D view goes full screen on its own; the map and status readout move into a corner of
@@ -1030,6 +1055,7 @@ function frame() {
   avatar.lantern.color.copy(terrain.lanternColor);
   avatar.lantern.intensity = lantern * (1 + Math.sin(t * 9) * 0.033 + Math.sin(t * 23) * 0.025); // flicker
   if (prefs.light === 'flashlight') aimFlashlight(lantern);
+  updateGradArrow(pos);
 
   stepOptAnimation(dt);
 

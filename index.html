@@ -16,6 +16,8 @@
           <button id="tour-btn" class="link small">Take the tour</button>
         </header>
 
+        <button id="respawn" class="ghost">New game</button>
+
         <section id="sec-move">
           <h2>Movement &amp; camera</h2>
           <dl class="keys" id="key-help"></dl>
@@ -55,10 +57,6 @@
             <div class="segmented four" id="min-at"></div>
             <p class="muted small" id="min-hint"></p>
           </div>
-          <label class="check">
-            <input type="checkbox" id="local-mins" /> Highlight local minima found
-          </label>
-          <button id="respawn" class="ghost">New game</button>
         </section>
 
         <section id="sec-look">
@@ -75,6 +73,12 @@
           </label>
           <label class="check">
             <input type="checkbox" id="show-path" checked /> Show my path <kbd>P</kbd>
+          </label>
+          <label class="check" title="An arrow on the ground where you stand, pointing downhill: along −∇, the way a gradient descent step would go from here.">
+            <input type="checkbox" id="grad-arrow" /> Gradient arrow <span class="muted">(−∇, downhill)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="local-mins" /> Highlight local minima found
           </label>
         </section>
 

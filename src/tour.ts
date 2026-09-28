@@ -21,7 +21,7 @@ const STEPS: Step[] = [
   {
     target: '#sec-game',
     title: 'Map',
-    html: `<p>Pick a landscape and map size, or roll new terrain with "New game".</p>`,
+    html: `<p>Pick a landscape and map size. "New game" at the top of this sidebar rolls new terrain.</p>`,
   },
   {
     target: '#sec-light',
