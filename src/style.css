@@ -183,6 +183,22 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .viewport.mouselook #scene { cursor: crosshair; }
 .viewport.dragging #scene { cursor: grabbing; }
 
+/* Points to the optimizer from the edge of the view when it's off screen. */
+.opt-pointer { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
+.opt-pointer[hidden] { display: none; }
+.opt-pointer i {
+  position: absolute; left: -11px; top: -11px; width: 22px; height: 22px;
+  background: #ff406e; clip-path: polygon(100% 50%, 0 0, 25% 50%, 0 100%);
+  transform: rotate(var(--angle, 0rad)); filter: drop-shadow(0 0 6px rgba(255, 64, 110, 0.8));
+}
+.opt-pointer span {
+  position: absolute; left: 0; top: 14px; transform: translateX(-50%); white-space: nowrap;
+  font-size: 10px; letter-spacing: 0.06em; color: #ff8aa6; text-shadow: 0 1px 3px #000;
+}
+
+.opt-pointer.above i { transform: rotate(var(--angle)) scale(0.7); }
+.opt-pointer.above span { top: -26px; }
+
 .fs-btn {
   position: absolute; top: 8px; right: 8px; z-index: 5;
   width: 32px; height: 32px; display: grid; place-items: center;
@@ -207,13 +223,48 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 }
 .intro {
   position: absolute; left: 50%; top: 50%; z-index: 5; transform: translate(-50%, -50%) scale(0.97);
-  width: min(360px, calc(100% - 32px)); padding: 16px 18px 12px;
-  background: rgba(10, 12, 20, 0.82); border: 1px solid var(--line); border-radius: 14px;
+  width: min(440px, calc(100% - 32px)); padding: 18px 20px 14px;
+  background: rgba(10, 12, 20, 0.86); border: 1px solid var(--line); border-radius: 14px;
   pointer-events: none; opacity: 0; transition: opacity 0.8s ease, transform 0.8s ease;
 }
 .intro.show { opacity: 1; transform: translate(-50%, -50%); transition-duration: 0.3s; }
-.intro h3 { margin: 0 0 4px; font-size: 15px; }
-.intro p { margin: 0 0 10px; font-size: 12px; }
+.intro-mode { margin-bottom: 8px; }
+.intro p { margin: 0 0 12px; font-size: 14px; color: var(--text); }
+.intro .keys { font-size: 13px; gap: 5px 12px; }
+.intro-goal, .tour-body .intro-goal {
+  margin: 0 0 8px; font: 700 22px/1.25 var(--sans); color: var(--accent);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+button.link { display: block; margin-top: 6px; padding: 0; border: 0; background: none; color: var(--accent2); cursor: pointer; }
+button.link:hover { text-decoration: underline; }
+
+/* Guided tour (src/tour.ts): the page dims except a spotlighted section, with a card beside it. */
+.tour { position: fixed; inset: 0; z-index: 50; }
+.tour-hole {
+  position: fixed; border: 2px solid var(--accent); border-radius: 10px; pointer-events: none;
+  box-shadow: 0 0 0 200vmax rgba(3, 4, 9, 0.66);
+  transition: left 0.25s ease, top 0.25s ease, width 0.25s ease, height 0.25s ease;
+}
+.tour-card {
+  position: fixed; width: min(340px, calc(100vw - 16px)); padding: 14px 16px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.tour-card.centered { width: min(420px, calc(100vw - 16px)); }
+.tour-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tour-head h3 { margin: 0 0 6px; font-size: 15px; }
+.tour-card.welcome { width: min(440px, calc(100vw - 16px)); padding: 18px 20px 14px; }
+.tour-card.welcome .tour-head { position: absolute; top: 18px; right: 20px; }
+.tour-card.welcome .tour-body p { font-size: 14px; margin-bottom: 12px; }
+.tour-card.welcome .keys { font-size: 13px; gap: 5px 12px; }
+.tour-count { font-size: 11px; color: var(--muted); }
+.tour-body p { margin: 0 0 8px; font-size: 13.5px; }
+.tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.tour-actions > span { flex: 1; }
+.tour-actions .primary, .tour-actions .ghost { width: auto; padding: 6px 12px; }
+.tour-skip { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 0; font-size: 12px; }
+.tour-skip:hover { color: var(--text); }
 
 .hud-mode { position: absolute; top: 12px; left: 14px; font-size: 11px; letter-spacing: 0.1em; color: var(--muted); pointer-events: none; }
 

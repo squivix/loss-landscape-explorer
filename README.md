@@ -20,19 +20,19 @@ ridges, craters, mesas and rivers built around a single guaranteed global minimu
 
 ## Map size
 
-Small (50), Medium (100), Large (160, the default) or Huge (250) units across. The textbook
+Small (50), Medium (100, the default), Large (160) or Huge (250) units across. The textbook
 landscapes stretch to fill it, heights included, so slopes stay the same; Wilds grows more land.
 The terrain is built in chunks, nearest to you first, a few milliseconds per frame, and chunks
 hidden by the fog aren't drawn. Medium and larger maps get lettered/numbered sectors.
 
-You discover ground by lighting it. The lantern lights a circle around you ("Light radius"); the
-flashlight (`F`) lights a pool of light wherever the camera points, joined to a small circle at
-your feet by a smooth teardrop, so you can sweep it around without walking. In first person it
-follows your view up and down: the pool lands where you're aiming and grows with distance, out
-to "Beam reach" (three times the light radius); its light spills faintly farther but doesn't
-reveal. A minimum inside the lit
-beam counts as found, same as walking up to it. The revealed area is drawn per
-pixel from a fog texture, so its edge is a smooth curve.
+You discover ground by lighting it. The flashlight (the default) lights a pool of light wherever
+the camera points, joined to a small circle at your feet by a smooth teardrop, so you can sweep
+it around without walking. In first person it follows your view up and down: the pool lands
+where you're aiming and grows with distance, out to "Beam reach"; its light spills faintly
+farther but doesn't reveal. `F` switches to the lantern, which lights a circle around you
+("Light radius"). A local minimum inside the lit beam counts as found, same as walking up to
+it; the global minimum only counts once you walk up to it. The revealed area is drawn per pixel
+from a fog texture, so its edge is a smooth curve.
 
 The explored map zooms (scroll, toward the cursor, or −/+) and pans (drag). It follows you by
 default, centered on you even at the map edge: pan away and it snaps back once you move. The "Follow" button toggles following off so it stays put; it turns back on with each new game or reload. While zoomed in, an
@@ -41,7 +41,10 @@ inset shows the whole map with your view outlined.
 ## Optimizers
 
 Gradient descent, momentum, RMSProp and Adam start from your position; "Continue" keeps stepping
-from where they stopped. Under "Escaping local minima":
+from where they stopped. A run is computed at once and played back at "Playback speed" (10 steps
+a second by default, or "Skip to the end"). "Camera follows the optimizer" turns your view to
+keep it in sight while it plays. A marker shows where it is and how far away: above the ball when
+it's in view, or as an arrow at the edge of the view when it's off screen or behind you. Under "Escaping local minima":
 
 - **Learning-rate schedule**: constant; cosine (warm up to 3×, cool to 0.05× over a run); warm
   restarts (three cosine cool-downs per run); cyclic (¼× ↔ 3×, three cycles per run).
@@ -73,7 +76,7 @@ map and status readout come along in a corner overlay. `Esc` leaves (after relea
 The controls flash up over the view when the page opens and fade after a few seconds (or once
 you start walking); they're also listed at the top of the left sidebar.
 
-The sidebars are grouped into Movement & camera, Game, Appearance, and Light & finding on the
+The sidebars are grouped into Movement & camera, Map, Appearance, and Light & finding on the
 left, and the map, status and optimizers on the right. Click a section's heading to fold it
 away (remembered).
 

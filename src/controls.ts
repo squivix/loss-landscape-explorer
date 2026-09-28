@@ -292,6 +292,21 @@ export class PlayerController {
     cam.lookAt(target);
   }
 
+  /**
+   * Turns the camera smoothly toward a point, for following something on its own. In first
+   * person the view aims straight at it; in third person the camera swings round behind you,
+   * facing it, and keeps its tilt. Mouse input still adds on top, but this wins over time.
+   */
+  lookToward(target: THREE.Vector3, dt: number) {
+    const dx = target.x - this.pos.x, dz = target.z - this.pos.z;
+    if (dx * dx + dz * dz < 0.01) return;
+    const k = 1 - Math.exp(-5 * dt);
+    this.yaw += wrapAngle(Math.atan2(dx, dz) - this.yaw) * k;
+    if (this.mode !== 'first') return;
+    const want = Math.atan2(target.y - (this.pos.y + EYE_HEIGHT), Math.hypot(dx, dz));
+    this.pitch += (Math.min(1.5, Math.max(-1.5, want)) - this.pitch) * k;
+  }
+
   private viewDir(pitch: number) {
     return new THREE.Vector3(
       Math.sin(this.yaw) * Math.cos(pitch),

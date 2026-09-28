@@ -13,6 +13,7 @@
         <header>
           <h1>Loss Landscape Explorer</h1>
           <p class="muted"><span class="mode-badge">Sandbox</span> Walk the loss surface, hunt for minima, and see where the optimizers end up.</p>
+          <button id="tour-btn" class="link small">Take the tour</button>
         </header>
 
         <section id="sec-move">
@@ -42,7 +43,7 @@
         </section>
 
         <section id="sec-game">
-          <h2>Game</h2>
+          <h2>Map</h2>
           <div id="landscapes" class="stack"></div>
           <div class="field">
             <div class="label">Map size</div>
@@ -63,7 +64,7 @@
             <input type="color" id="solid-color" value="#6f8fb0" /> Ground color
           </label>
           <label class="check">
-            <input type="checkbox" id="contours" checked /> Contour lines
+            <input type="checkbox" id="contours" /> Contour lines
           </label>
           <label class="check">
             <input type="checkbox" id="lights" /> Daytime <kbd>L</kbd>
@@ -83,7 +84,7 @@
             <span><span id="light-radius-label">Light radius</span> <output id="light-radius-out"></output></span>
             <input type="range" id="light-radius" min="1" max="12" step="0.1" value="4.5" />
           </label>
-          <label class="slider" title="How close you have to get to a minimum for it to count as found. With the flashlight, minima inside the beam count too.">
+          <label class="slider" title="How close you have to get to a minimum for it to count as found. With the flashlight, local minima inside the beam count too; the global minimum only counts once you walk up to it.">
             <span>Counts as found within <output id="det-out" class="mono"></output></span>
             <input type="range" id="det" min="0.25" max="4" step="0.25" value="1" />
           </label>
@@ -106,9 +107,11 @@
         <!-- In full screen the map and status move here, since the sidebars are gone. -->
         <div class="fs-hud" id="fs-hud"></div>
         <div class="crosshair" id="crosshair"></div>
+        <div class="opt-pointer" id="opt-pointer" hidden><i></i><span class="mono">optimizer</span></div>
         <div class="intro" id="intro" aria-live="polite">
-          <h3>Sandbox mode</h3>
-          <p class="muted">Explore the loss surface in the dark, look for its minima, and let optimizers loose from wherever you stand.</p>
+          <div class="intro-mode"><span class="mode-badge">Sandbox</span></div>
+          <h3 class="intro-goal">Find the lowest point on the map</h3>
+          <p>The ground's height is the loss. Explore it in the dark, hunt for minima, and let optimizers loose from wherever you stand.</p>
           <dl class="keys" id="intro-keys"></dl>
         </div>
         <div class="lock-hint" id="lock-hint">Click to look around · <kbd>Esc</kbd> releases the mouse</div>
@@ -186,7 +189,15 @@
               <input type="checkbox" id="sam" /> Prefer wide valleys <span class="muted">(SAM)</span>
             </label>
           </details>
+          <label class="slider" title="How fast the optimizer's run plays back. It's computed all at once; this only changes how fast you watch it.">
+            <span>Playback speed <output id="opt-speed-out" class="mono"></output></span>
+            <input type="range" id="opt-speed" min="0" max="1" step="0.01" />
+          </label>
+          <label class="check" title="While a run plays, the camera turns to keep the optimizer in view.">
+            <input type="checkbox" id="opt-watch" /> Camera follows the optimizer
+          </label>
           <button id="run" class="primary">▶ Run from my position</button>
+          <button id="opt-skip" class="link small" hidden>⏭ Skip to the end</button>
           <button id="continue" class="ghost" hidden>⏩ Continue</button>
           <p id="opt-result" class="muted mono small"></p>
         </section>

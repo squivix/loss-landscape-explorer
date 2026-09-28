@@ -23,6 +23,7 @@ import { MAP_SIZES, THEMES, Terrain, shapeDistance, themeSwatch, type MapSizeId,
 import { PlayerController, wrapAngle, type ViewMode } from './controls';
 import { Trail, makeAvatar, makeBeacon, makeStars } from './objects';
 import { Minimap, sectorName } from './minimap';
+import { startTour, tourSeen } from './tour';
 
 /** Default radius of the ground you light up (and discover) around you. */
 const REVEAL_RADIUS = 4.5;
@@ -40,7 +41,8 @@ const FLASH_MIN_AIM = 1.5;
 /** Width of the beam's soft rim in the 3-D view, as a fraction of the pool's radius. */
 const FLASH_EDGE = 0.8;
 type LightKind = 'lantern' | 'flashlight';
-const OPT_STEPS_PER_SEC = 120;
+/** Optimizer playback speed, steps per second: the slider runs log-scaled between these. */
+const OPT_SPEED_MIN = 5, OPT_SPEED_MAX = 600;
 const TRAIL_OFFSET = 0.12;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -139,12 +141,24 @@ let detectTimer = 0;
 let movedSinceDetect = true;
 
 const PREFS_KEY = 'lle.prefs';
-const prefs = { lights: false, path: true, minAt: 'random' as MinPlacement, minU: 0.5, minV: 0.5, localMins: false, mapSize: 'large' as MapSizeId, revealRadius: REVEAL_RADIUS, mouseLookFirst: true, mouseLookThird: false, hills: true, light: 'lantern' as LightKind, schedule: 'constant' as Schedule, noise: 0, sam: false };
+const prefs = { lights: false, path: true, minAt: 'random' as MinPlacement, minU: 0.5, minV: 0.5, localMins: false, mapSize: 'medium' as MapSizeId, revealRadius: REVEAL_RADIUS, mouseLookFirst: true, mouseLookThird: false, hills: true, light: 'flashlight' as LightKind, schedule: 'constant' as Schedule, noise: 0, sam: false, optSpeed: 10, optWatch: true, defaults: 3 };
+/**
+ * Every pref gets saved, so an old default is indistinguishable from a choice. When the defaults
+ * change, prefs saved under the old ones drop the values that still match those old defaults.
+ */
+let savedUnderOldDefaults = false;
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}');
-  // Every pref gets saved, so the old default light radius is indistinguishable from a choice.
   if (saved.revealRadius === 3.2) delete saved.revealRadius;
+  if ((saved.defaults ?? 1) < 2) {
+    savedUnderOldDefaults = true;
+    if (saved.light === 'lantern') delete saved.light;
+    if (saved.mapSize === 'large') delete saved.mapSize;
+  }
+  if ((saved.defaults ?? 1) < 3 && saved.optSpeed === 30) delete saved.optSpeed;
+  delete saved.defaults;
   Object.assign(prefs, saved);
+  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); // records which defaults they're under
 } catch {}
 
 function setPrefs(patch: Partial<typeof prefs>) {
@@ -187,6 +201,9 @@ function applyPrefs() {
   $<HTMLInputElement>('noise').value = String(prefs.noise);
   $('noise-out').textContent = prefs.noise ? prefs.noise.toFixed(2) : 'off';
   $<HTMLInputElement>('sam').checked = prefs.sam;
+  $<HTMLInputElement>('opt-speed').value = String(Math.log(prefs.optSpeed / OPT_SPEED_MIN) / Math.log(OPT_SPEED_MAX / OPT_SPEED_MIN));
+  $('opt-speed-out').textContent = `${Math.round(prefs.optSpeed)} steps/s`;
+  $<HTMLInputElement>('opt-watch').checked = prefs.optWatch;
   // Shown on the folded "Escaping local minima" heading, so active tricks aren't hidden.
   const on = [
     prefs.schedule !== 'constant' && SCHEDULES.find((sc) => sc.id === prefs.schedule)!.label.toLowerCase(),
@@ -201,9 +218,11 @@ function applyPrefs() {
 }
 
 const STYLE_KEY = 'lle.terrainStyle';
-const style: TerrainStyle = { theme: 'grass', solid: '#6f8fb0', contours: true };
+const style: TerrainStyle = { theme: 'grass', solid: '#6f8fb0', contours: false };
 try {
-  Object.assign(style, JSON.parse(localStorage.getItem(STYLE_KEY) ?? '{}'));
+  const saved = JSON.parse(localStorage.getItem(STYLE_KEY) ?? '{}');
+  if (savedUnderOldDefaults && saved.contours === true) delete saved.contours; // was the default
+  Object.assign(style, saved);
 } catch {}
 if (!THEMES.some((t) => t.id === style.theme)) style.theme = 'spectrum';
 
@@ -254,7 +273,7 @@ function buildWorld(reroll: boolean) {
 }
 
 function mapSize() {
-  return (MAP_SIZES.find((m) => m.id === prefs.mapSize) ?? MAP_SIZES[2]).size;
+  return (MAP_SIZES.find((m) => m.id === prefs.mapSize) ?? MAP_SIZES[1]).size;
 }
 
 /** Sidebar sections fold away by clicking their heading; which ones are folded is remembered. */
@@ -373,7 +392,8 @@ function detectMinimum() {
 }
 
 /**
- * Spotting with the flashlight: a minimum inside the lit beam counts as found. The beam is
+ * Spotting with the flashlight: a local minimum inside the lit beam counts as found (the global
+ * minimum only counts once you walk up to it, via detectMinimum). The beam is
  * covered with seeds on a fixed world grid; each slides downhill to its own minimum. Results are
  * cached per grid cell (sweeping back over ground is free) and new cells are worked through a
  * little each frame, since on Wilds each slide is fairly expensive.
@@ -394,7 +414,7 @@ function queueBeamSeeds(beam: RevealShape) {
       const key = `${i},${j}`;
       const hit = spotCache.get(key);
       if (hit === undefined) spotQueue.push({ key, x, z });
-      else if (hit && lit(hit.mw.x, hit.mw.z) > 0) recordMinimum(hit.m, hit.mw);
+      else if (hit && lit(hit.mw.x, hit.mw.z) > 0) spotMinimum(hit);
     }
   // Nearest first: that's where you're looking most closely.
   spotQueue.sort((a, b) => Math.hypot(b.x - beam.x, b.z - beam.z) - Math.hypot(a.x - beam.x, a.z - beam.z));
@@ -411,17 +431,25 @@ function processBeamSeeds(budgetMs: number) {
     const m = findLocalMin(L, sp.x, sp.z);
     const hit = m.converged ? { m, mw: terrain.fnToWorld(m.x, m.z) } : null;
     spotCache.set(s.key, hit);
-    if (hit && lit(hit.mw.x, hit.mw.z) > 0) recordMinimum(hit.m, hit.mw);
+    if (hit && lit(hit.mw.x, hit.mw.z) > 0) spotMinimum(hit);
   }
+}
+
+function spotMinimum(hit: { m: LocalMin; mw: Point2 }) {
+  if (!isGlobalMin(hit.m)) recordMinimum(hit.m, hit.mw);
+}
+
+/** A minimum just off the map edge can leave near-zero loss at the edge; only on-map ones count. */
+function isGlobalMin(m: LocalMin) {
+  const tol = 0.05 * Math.min(10, L.xRange[1] - L.xRange[0]);
+  return m.loss < 1e-3 && L.globalMinima.some((g) => Math.hypot(g.x - m.x, g.z - m.z) < tol);
 }
 
 function recordMinimum(m: LocalMin, mw: Point2) {
   // Same minimum if it's within a hair of one we've already found (rounding-based keys
   // split one minimum into several when it sits on a rounding boundary like ±0.00).
   for (const f of found.values()) if (Math.hypot(f.p.x - mw.x, f.p.z - mw.z) < 0.25) return;
-  // A minimum just off the map edge can leave near-zero loss at the edge; only on-map ones count.
-  const global =
-    m.loss < 1e-3 && L.globalMinima.some((g) => Math.hypot(g.x - m.x, g.z - m.z) < 0.05 * Math.min(10, L.xRange[1] - L.xRange[0]));
+  const global = isGlobalMin(m);
   found.set(`${found.size}`, { p: mw, global });
 
   const beacon = makeBeacon(global ? '#ffd24a' : '#19e0ff');
@@ -504,6 +532,7 @@ function runOpt() {
   optTrail.reveal(0);
   optShown = 0;
   optHead.visible = true;
+  hideIntro(); // make room to watch
   continueOpt();
 }
 
@@ -574,14 +603,60 @@ function renderOptButtons() {
   $('continue').textContent = `⏩ Continue ${n} more steps`;
 }
 
+const optPlaying = () => optWorld.length > 0 && optShown < optWorld.length;
+
 function stepOptAnimation(dt: number) {
-  if (!optWorld.length || optShown >= optWorld.length) return;
+  $('opt-skip').hidden = !optPlaying();
+  if (!optPlaying()) return;
   const prev = Math.floor(optShown);
-  optShown = Math.min(optWorld.length, optShown + dt * OPT_STEPS_PER_SEC);
+  optShown = Math.min(optWorld.length, optShown + (Number.isFinite(dt) ? dt * prefs.optSpeed : Infinity));
   const now = Math.floor(optShown);
   for (let i = prev; i < now; i++) terrain.reveal(optWorld[i].x, optWorld[i].z, OPT_REVEAL_RADIUS);
   optTrail.reveal(now);
-  optHead.position.copy(optWorld[Math.max(0, now - 1)]);
+  // The ball glides between steps (along the ground), so slow playback still looks smooth.
+  const f = Math.max(0, optShown - 1), i0 = Math.floor(f), i1 = Math.min(optWorld.length - 1, i0 + 1);
+  optHead.position.lerpVectors(optWorld[i0], optWorld[i1], f - i0);
+  optHead.position.y = terrain.heightAt(optHead.position.x, optHead.position.z) + TRAIL_OFFSET;
+}
+
+/**
+ * Where the optimizer is, for as long as there's a run: a marker with its distance above the
+ * ball when it's in view, or an arrow at the edge of the view pointing to it when it's off
+ * screen or behind you.
+ */
+const optPointer = $('opt-pointer');
+const camSpace = new THREE.Vector3(), ndc = new THREE.Vector3();
+function updateOptPointer() {
+  if (!optHead.visible) return void (optPointer.hidden = true);
+  camera.updateMatrixWorld();
+  camSpace.copy(optHead.position).applyMatrix4(camera.matrixWorldInverse); // x right, y up, -z ahead
+  ndc.copy(optHead.position).project(camera);
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  const d = optHead.position.distanceTo(player.pos);
+  optPointer.hidden = false;
+  const label = optPointer.querySelector('span')!;
+  label.textContent = `optimizer · ${d < 10 ? d.toFixed(1) : Math.round(d)} m`;
+  // Centered under the arrow, but kept inside the view near its left and right edges.
+  const place = (x: number, y: number) => {
+    optPointer.style.transform = `translate(${x}px, ${y}px)`;
+    const half = label.offsetWidth / 2 + 6;
+    label.style.marginLeft = `${Math.min(0, w - x - half) + Math.max(0, half - x)}px`;
+  };
+  const inView = camSpace.z < 0 && Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+  optPointer.classList.toggle('above', inView);
+  if (inView) {
+    // Pointing down at the ball from just above its top (it looks big up close).
+    const top = ndc.copy(optHead.position).setY(optHead.position.y + 0.25).project(camera);
+    place(((top.x + 1) / 2) * w, ((1 - top.y) / 2) * h - 12);
+    optPointer.style.setProperty('--angle', `${Math.PI / 2}rad`);
+    return;
+  }
+  let dx = camSpace.x, dy = camSpace.y;
+  // Behind you: on the left or right edge, whichever way is the shorter turn.
+  if (camSpace.z > 0) (dx = dx < 0 ? -1 : 1), (dy = 0);
+  const m = 40, t = Math.min((w / 2 - m) / Math.abs(dx || 1e-9), (h / 2 - m) / Math.abs(dy || 1e-9));
+  place(w / 2 + dx * t, h / 2 - dy * t);
+  optPointer.style.setProperty('--angle', `${Math.atan2(-dy, dx)}rad`);
 }
 
 // ---------- UI ----------
@@ -687,23 +762,31 @@ const keyList = (rows: [string, string][]) =>
 
 function renderKeyHelp() {
   $('key-help').innerHTML = keyList(keyRows());
-  if (introShown) showIntro();
+  $('intro-keys').innerHTML = keyList(keyRows().filter(([k]) => k !== 'Esc'));
 }
 
 /**
- * The controls, shown over the view when the page opens. It fades out after a while, sooner
- * once you've walked a few steps, and the same list stays in the sidebar.
+ * The goal and controls, shown over the view when the page opens (after the tour, on a first
+ * visit). It fades out after a while, sooner once you've walked a few steps, and the same key
+ * list stays in the sidebar.
  */
-const INTRO_SECONDS = 9, INTRO_WALK = 6;
-let introShown = true;
+const INTRO_SECONDS = 10, INTRO_WALK = 6;
+let introUntil: { t: number; walked: number } | null = null;
 function showIntro() {
-  $('intro-keys').innerHTML = keyList(keyRows().filter(([k]) => k !== 'Esc'));
+  introUntil = { t: clock.elapsedTime + INTRO_SECONDS, walked: walked + INTRO_WALK };
   $('intro').classList.add('show');
 }
 function hideIntro() {
-  introShown = false;
+  introUntil = null;
   $('intro').classList.remove('show');
 }
+function runTour() {
+  hideIntro();
+  player.held.clear(); // the tour swallows key releases
+  if (document.pointerLockElement) document.exitPointerLock();
+  startTour();
+}
+$('tour-btn').onclick = runTour;
 
 player.onModeChange = applyMode;
 player.onLockChange = (locked) => viewport.classList.toggle('locked', locked);
@@ -727,6 +810,12 @@ $<HTMLInputElement>('sens').oninput = (e) => {
 lrInput.oninput = syncOutputs;
 $<HTMLInputElement>('noise').oninput = (e) => setPrefs({ noise: Number((e.target as HTMLInputElement).value) });
 $<HTMLInputElement>('sam').onchange = (e) => setPrefs({ sam: (e.target as HTMLInputElement).checked });
+$<HTMLInputElement>('opt-speed').oninput = (e) => {
+  const v = Number((e.target as HTMLInputElement).value);
+  setPrefs({ optSpeed: OPT_SPEED_MIN * (OPT_SPEED_MAX / OPT_SPEED_MIN) ** v });
+};
+$<HTMLInputElement>('opt-watch').onchange = (e) => setPrefs({ optWatch: (e.target as HTMLInputElement).checked });
+$('opt-skip').onclick = () => stepOptAnimation(Infinity); // plays the rest at once
 $<HTMLInputElement>('steps').oninput = () => {
   syncOutputs();
   renderOptButtons();
@@ -918,6 +1007,7 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
+  if (prefs.optWatch && optPlaying() && optHead.visible) player.lookToward(optHead.position, dt);
   const moved = player.update(dt, terrain);
   const pos = player.pos;
   // Build a little more of the map each frame, nearest first, and skip drawing what the fog hides.
@@ -930,7 +1020,7 @@ function frame() {
   sun.position.copy(sun.target.position).add(SUN_OFFSET);
   stars.position.copy(camera.position);
   walked += moved;
-  if (introShown && (t > INTRO_SECONDS || walked > INTRO_WALK)) hideIntro();
+  if (introUntil && (t > introUntil.t || walked > introUntil.walked)) hideIntro();
   // The flashlight reveals as you turn, not just as you walk.
   if (prefs.light === 'flashlight') updateBeamAim(pos);
   const turned = Number.isNaN(revealYaw) ||
@@ -989,6 +1079,7 @@ function frame() {
     $('explored').textContent = `${pct.toFixed(pct < 1 ? 2 : 1)}%`;
   }
 
+  updateOptPointer();
   minimap.draw(terrain, minimapState());
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -1002,6 +1093,8 @@ renderSchedules();
 initCollapsibleSections();
 loadLandscape('wilds');
 applyPrefs();
-applyMode(player.mode); // also shows the intro
+applyMode(player.mode);
+if (tourSeen()) showIntro();
+else runTour();
 syncOutputs();
 requestAnimationFrame(frame);
