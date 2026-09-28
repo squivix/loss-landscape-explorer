@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loss Landscape Explorer</title>
+    <meta name="description" content="A sandbox for walking around optimization loss surfaces in 3D and watching where optimizers end up." />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <aside class="panel left">
+        <header>
+          <h1>Loss Landscape Explorer</h1>
+          <p class="muted"><span class="mode-badge">Sandbox</span> Walk the loss surface, hunt for minima, and see where the optimizers end up.</p>
+        </header>
+
+        <section id="sec-move">
+          <h2>Movement &amp; camera</h2>
+          <dl class="keys" id="key-help"></dl>
+          <div class="segmented" id="view-mode" title="Switch with C">
+            <button data-mode="first">First person</button>
+            <button data-mode="third">Third person</button>
+          </div>
+          <label class="check" title="Captured: click the view and the mouse steers the camera until Esc. Not captured: drag to look. Remembered separately for each view.">
+            <input type="checkbox" id="capture" /> Capture mouse <span class="muted">· <span id="capture-view"></span></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="hills" checked /> Hills affect speed
+          </label>
+          <label class="check" id="tank-row">
+            <input type="checkbox" id="tank" /> Tank controls <span class="muted">(A/D turn)</span>
+          </label>
+          <label class="slider">
+            <span>Mouse sensitivity <output id="sens-out"></output></span>
+            <input type="range" id="sens" min="0.5" max="3" step="0.1" value="1" />
+          </label>
+          <div class="pad" title="On-screen movement pad (touch or mouse)">
+            <span></span><button data-action="fwd">W</button><span></span>
+            <button data-action="left">A</button><button data-action="back">S</button><button data-action="right">D</button>
+          </div>
+        </section>
+
+        <section id="sec-game">
+          <h2>Game</h2>
+          <div id="landscapes" class="stack"></div>
+          <div class="field">
+            <div class="label">Map size</div>
+            <div class="segmented four" id="map-size"></div>
+          </div>
+          <div class="field">
+            <div class="label">Global minimum</div>
+            <div class="segmented four" id="min-at"></div>
+            <p class="muted small" id="min-hint"></p>
+          </div>
+          <button id="respawn" class="ghost">New game</button>
+        </section>
+
+        <section id="sec-look">
+          <h2>Appearance</h2>
+          <div id="themes" class="chips"></div>
+          <label class="check" id="solid-row">
+            <input type="color" id="solid-color" value="#6f8fb0" /> Ground color
+          </label>
+          <label class="check">
+            <input type="checkbox" id="contours" checked /> Contour lines
+          </label>
+          <label class="check">
+            <input type="checkbox" id="lights" /> Daytime <kbd>L</kbd>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="show-path" checked /> Show my path <kbd>P</kbd>
+          </label>
+        </section>
+
+        <section id="sec-light">
+          <h2>Light &amp; finding</h2>
+          <div class="segmented" id="light-kind" title="How you light up (and discover) the ground">
+            <button data-kind="lantern">Lantern</button>
+            <button data-kind="flashlight">Flashlight <kbd>F</kbd></button>
+          </div>
+          <label class="slider">
+            <span><span id="light-radius-label">Light radius</span> <output id="light-radius-out"></output></span>
+            <input type="range" id="light-radius" min="1" max="12" step="0.1" value="4.5" />
+          </label>
+          <label class="slider" title="How close you have to get to a minimum for it to count as found. With the flashlight, minima inside the beam count too.">
+            <span>Counts as found within <output id="det-out" class="mono"></output></span>
+            <input type="range" id="det" min="0.25" max="4" step="0.25" value="1" />
+          </label>
+          <label class="check">
+            <input type="checkbox" id="local-mins" /> Highlight local minima found
+          </label>
+        </section>
+
+      </aside>
+
+      <div class="viewport" id="viewport">
+        <canvas id="scene"></canvas>
+        <div class="hud-mode mono" id="hud-mode"></div>
+        <button id="fullscreen" class="fs-btn" title="Full screen (O)" aria-label="Full screen">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path class="fs-enter" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" />
+            <path class="fs-exit" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" />
+          </svg>
+        </button>
+        <!-- In full screen the map and status move here, since the sidebars are gone. -->
+        <div class="fs-hud" id="fs-hud"></div>
+        <div class="crosshair" id="crosshair"></div>
+        <div class="intro" id="intro" aria-live="polite">
+          <h3>Sandbox mode</h3>
+          <p class="muted">Explore the loss surface in the dark, look for its minima, and let optimizers loose from wherever you stand.</p>
+          <dl class="keys" id="intro-keys"></dl>
+        </div>
+        <div class="lock-hint" id="lock-hint">Click to look around · <kbd>Esc</kbd> releases the mouse</div>
+        <div class="toasts" id="toasts"></div>
+        <div class="win" id="win" hidden>
+          <div class="win-card">
+            <div class="win-icon">🏆</div>
+            <h3 id="win-title">Global minimum found!</h3>
+            <div class="readout mono" id="win-stats"></div>
+            <button id="play-again" class="primary">↻ Play again <kbd>Enter</kbd></button>
+            <button id="keep-exploring" class="ghost">Keep exploring <kbd>Esc</kbd></button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="panel right">
+        <section id="sec-map">
+          <h2>Explored map</h2>
+          <p class="muted small">Fog of war: only ground you (or an optimizer) have visited is revealed. Scroll to zoom, drag to pan; "Follow" keeps the map centered on you.</p>
+          <div class="minimap-wrap">
+            <canvas id="minimap" class="minimap"></canvas>
+            <div class="minimap-zoom">
+              <button id="map-zoom-in" title="Zoom in (or scroll on the map)">+</button>
+              <span id="map-zoom" class="mono">×1</span>
+              <button id="map-zoom-out" title="Zoom out">−</button>
+              <button id="map-follow" class="on follow"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/><path d="M8 0v3M8 13v3M0 8h3M13 8h3" stroke="currentColor" stroke-width="1.6"/></svg>Follow</button>
+            </div>
+          </div>
+          <ul class="legend small">
+            <li><i style="background: #ffa630"></i>You &amp; your view</li>
+            <li><i style="background: #19e0ff"></i>Your path</li>
+            <li><i style="background: #ff406e"></i>Optimizer path</li>
+            <li><i class="ring" style="border-color: #19e0ff"></i>Local min found</li>
+            <li><i class="ring" style="border-color: #ffd24a"></i>Global min found</li>
+          </ul>
+          <button id="show-global" class="ghost">★ Show global minima</button>
+        </section>
+        <section id="sec-status">
+          <h2>Status</h2>
+          <div class="readout mono two">
+            <div>x <b id="px">–</b></div>
+            <div>explored <b id="explored">0%</b></div>
+            <div>z <b id="pz">–</b></div>
+            <div>local <b id="n-local">0</b></div>
+            <div>loss <b id="ploss" class="accent2">–</b></div>
+            <div>global <b id="n-global">0</b></div>
+            <div>|∇| <b id="pgrad">–</b></div>
+            <div id="sector-row">sector <b id="psector">–</b></div>
+          </div>
+        </section>
+
+        <section id="sec-opt">
+          <h2>Optimizers</h2>
+          <div id="optimizers" class="stack tight"></div>
+          <label class="slider">
+            <span>Learning rate <output id="lr-out" class="mono"></output></span>
+            <input type="range" id="lr" min="-5" max="0" step="0.05" />
+          </label>
+          <label class="slider">
+            <span>Steps per run <output id="steps-out" class="mono"></output></span>
+            <input type="range" id="steps" min="25" max="1500" step="25" value="300" />
+          </label>
+          <details class="more" id="tricks">
+            <summary>Escaping local minima <span class="muted" id="tricks-on"></span></summary>
+            <div class="field">
+              <div class="label">Learning-rate schedule</div>
+              <div class="segmented four" id="schedule"></div>
+              <p class="muted small" id="schedule-hint"></p>
+            </div>
+            <label class="slider" title="Random jitter on each step, strongest at the start of a run and cooling to nothing by its end (like simulated annealing), so it can shake out of shallow pits and still settle.">
+              <span>Noise <output id="noise-out" class="mono"></output></span>
+              <input type="range" id="noise" min="0" max="1" step="0.05" value="0" />
+            </label>
+            <label class="check" title="Sharpness-aware minimization: steps using the slope a little way uphill, so narrow pits barely register and wide valleys win. It can zigzag in narrow valleys.">
+              <input type="checkbox" id="sam" /> Prefer wide valleys <span class="muted">(SAM)</span>
+            </label>
+          </details>
+          <button id="run" class="primary">▶ Run from my position</button>
+          <button id="continue" class="ghost" hidden>⏩ Continue</button>
+          <p id="opt-result" class="muted mono small"></p>
+        </section>
+        <footer class="small muted">
+          Recreation of the
+          <a href="https://landscape-explorer.aiml.lt/" target="_blank" rel="noopener">Loss Landscape Explorer</a>
+          by Linas Petkevičius (<a href="https://aiml.lt/" target="_blank" rel="noopener">AIML</a>).
+        </footer>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
